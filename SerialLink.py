@@ -11,6 +11,8 @@ import sqlite3
 # /* ZHA Commands */
 E_SL_MSG_PDM_HOST_AVAILABLE_RESPONSE    = 0x8300
 
+bRunning = True
+
 class cPDMFunctionality(threading.Thread):
     """Class implementing the binary serial protocol to the control bridge node"""
     def __init__(self, port):
@@ -72,9 +74,9 @@ class cSerialLink(threading.Thread):
             sData is a string containing the packed message data
         """
         self.commslogger.info("Host->Node: Message Type 0x%04x, length %d %s", eMessageType, len(sData), sData)
-        
+        # calculate checksum value
         u8Checksum = ((eMessageType >> 8) & 0xFF) ^ ((eMessageType >> 0) & 0xFF)
-        u8Checksum = u8Checksum ^ (((len(sData)//2) >> 8) & 0xFF) ^ (((len(sData)//2) >> 0) & 0xFF)
+        u8Checksum = u8Checksum ^ (((len(sData)) >> 8) & 0xFF) ^ (((len(sData)) >> 0) & 0xFF)
         bIn=True
         for byte in sData:
             if bIn:
@@ -85,8 +87,9 @@ class cSerialLink(threading.Thread):
                 u8Checksum = u8Checksum ^ u8Byte
                 bIn=True
 
-        u16Length = len(sData)//2
+        u16Length = len(sData)
 
+        # send data
         self._WriteByte(struct.pack("B", 0x01), True)
         self._WriteByte(struct.pack("B", (eMessageType >> 8) & 0xFF))
         self._WriteByte(struct.pack("B", (eMessageType >> 0) & 0xFF))
@@ -180,16 +183,131 @@ class cSerialLink(threading.Thread):
                         state = state + 1
                     else:
                         self.commslogger.debug("Message Add Data: 0x%02x", ord(byte))
-                        sData = sData + byte
+                        sData = sData + ord(byte)
         return (0, "")
 
     def run(self):
-        """ Reader thread function.
-            Keep reading message from the port.
-            Log message are sent straight to the logger.
-            Everything else is queued for listers that are waiting for message types via WaitMessage().
+        """ Read thread function.
+            Keep reading messages from the port.
+            Log messages are sent straight to the logger.
+            Eveything else is queued for listers that are waiting for message types via WaitMessage().
         """
         self.logger.debug("Read thread starting")
+        try:
+            while (bRunning):
+                (eMessageType, sData) = self._ReadMessage()
+                self.logger.info("Node->Host: Response 0x%04x, length %d", eMessageType, len(sData))
+
+                if ((eMessageType == E_SL_MSG_LOG) or
+                    (eMessageType == E_SL_MSG_NODE_CLUSTER_LIST) or
+                    (eMessageType == E_SL_MSG_NODE_ATTRIBUTE_LIST) or
+                    (eMessageType == E_SL_MSG_NODE_COMMAND_ID_LIST) or
+                    (eMessageType == E_SL_MSG_NETWORK_JOINED_FORMED) or
+                    (eMessageType == E_SL_MSG_MATCH_DESCRIPTOR_RESPONSE) or
+                    (eMessageType == E_SL_MSG_DEVICE_ANNOUNCE) or
+                    (eMessageType == E_SL_MSG_READ_ATTRIBUTE_RESPONSE) or
+                    (eMessageType == E_SL_MSG_GET_GROUP_MEMBERSHIP_RESPONSE) or
+                    (eMessageType == E_SL_MSG_MANAGEMENT_LQI_RESPONSE)):
+                    if (eMessageType == E_SL_MSG_LOG):
+                        logLevel = struct.unpack("B", sData[0])[0]
+                        logLevel = ["EMERG", "ALERT", "CRIT ", "ERROR", "WARN ", "NOT  ", "INFO ", "DEBUG"][logLevel]
+                        logMessage = sData[1:]
+                        self.logger.info("Module: %s: %s", logLevel, logMessage)
+                        self.logger.info("Module: %s", logMessage)
+
+                    if (eMessageType == E_SL_MSG_NODE_CLUSTER_LIST):
+                        stringme = (':'.join(x.encode('hex') for x in sData))
+                        self.logger.info("Node->Host: Cluster List Received %s", stringme)
+                    if (eMessageType == E_SL_MSG_NODE_ATTRIBUTE_LIST):
+                        self.logger.info("Node->Host: Attribute List ")
+
+                    if (eMessageType == E_SL_MSG_NODE_COMMAND_ID_LIST):
+                        self.logger.info("Node->Host: Command List ")
+
+                    if (eMessageType == E_SL_MSG_NETWORK_JOINED_FORMED):
+                        stringme= (':'.join(x.encode('hex') for x in sData))
+                        self.logger.info("Network joined/formed event received %s", stringme)
+
+                    if (eMessageType == E_SL_MSG_MATCH_DESCRIPTOR_RESPONSE):
+                        stringme = (':'.join(x.encode('hex') for x in sData))
+                        self.logger.info("Match Descriptor response %s", stringme)
+
+                    if (eMessageType == E_SL_MSG_DEVICE_ANNOINCE):
+                        stringme= (':'.join(x.encode('hex') for x in sData))
+                        self.logger.info("Device Announce response %s", stringme)
+
+                    if (eMessageType == E_SL_MSG_READ_ATTRIBUTE_RESPONSE):
+                        stringme= (':'.join(x.encode('hex') for x in sData))
+                        self.logger.info("Read Attribute response %s", stringme)
+
+                    if (eMessageType == E_SL_MSG_GET_MEMBERSHIP_RESPONSE):
+                        stringme= (':'.join(x.encode('hex') for x in sData))
+                        self.logger.info("GetMembership response %s", stringme)
+
+                    if (eMessageType == E_SL_MSG_MANAGEMENT_LQI_RESPONSE):
+                        stringme= (':'.join(x.encode('hex') for x in sData))
+                        self.logger.info("LQI response %s", stringme)
+                else:
+                    try:
+
+                        # Yield control to other thread to allow it to set up the listener
+                        if ((eMessageType == E_SL_MSG_SAVE_PDM_RECORD) or
+                            (eMessageType == E_SL_MSG_LOAD_PDM_RECORD_REQUEST) or
+                            (eMessageType == E_SL_MSG_DELETE_PDM_RECORD) or
+                            (eMessageType == E_SL_MSG_PDM_HOST_AVAILABLE)):
+                            self.dMessageQueue[eMessageType] = Queue.Queue(30)
+
+                        time.sleep(0)
+                        self.dMessageQueu[eMessageType].put(sData)
+                    except KeyError:
+                        self.logger.warning("Unhandleed message 0x%04x", eMessageType)
+        finally:
+            self.logger.debug("Read thread terminated")
+
+    def SendMessage(self, eMessageType, sData=""):
+        """ Send a message to the node and wait for its synchronous response
+            Raise cSerialLinkError or cModuleError on failure
+        """
+        self.logger.info("Host->Node: Command 0x%04x, length %d", eMessageType, len(sData))
+        self._WriteMessage(eMessageType, sData)
+        try:
+            status = self.WaitMessage(E_SL_MSG_STATUS, 1)
+        except cSerialLinkError:
+            raise cSerialLinkeError("Module did not acknowledge command 0x%04x" % eMessageType)
+
+        status = struct.unpack("B", status[0])[0]
+        message = "" if len(sData) == 0 else sData
+
+        if status == 0:
+            stringme = (':'.join(x.encode('hex') for x in sData))
+            self.logger.info("Command success. %s " % message)
+        else:
+            # Error status code
+            raise cModuleError(status, message)
+
+    def WaitMessage(self, eMessageType, fTimeout):
+        """ Wait for a message of type eMessageType for fTimeout seconds
+            Raise cSerialLinkError on failure
+            Many different threads can all block on this function as long
+            as they are waiting on different message types.
+        """
+        sData = None
+        try:
+            # Get the message from the receiver thread and delete the queue entry
+            sData = self.dMessageQueue[eMessageType].get(True, fTimeout)
+            del self.dMessageQueue[eMessageType]
+        except KeyError:
+            self.dMessageQueue[eMessageType] = Queue.Queue()
+            try:
+                # Get the message from the receiver thread and delete the queue entry
+                sData = self.dMessageQueue[eMessageType].get(True, fTimeout)
+                del self.dMessageQueue[eMessageType]
+            except Queue.Empty:
+                # Raise exceptin no data received
+                raise cSerialLinkError("Message 0x%04x not received with %fs" % (eMessageType, fTimerout))
+        self.logger.debug("Pulled message type 0x%04x from queue", eMessageType)
+        return sData
+
 
 
 class cControlBridge():
@@ -197,6 +315,15 @@ class cControlBridge():
     def __init__(self, port, baudrate=115200):
         self.oSL = cSerialLink(port, baudrate)
         self.oPdm = cPDMFunctionality(port)
+
+    def parseCommand(self, IncCommand):
+        """parse commands"""
+        command=str.split(IncCommand, ",")
+        if command[0] == 'EXIT':
+            return False
+
+        if command[0] == 'EXP':
+            self.SetExtendedPANID(command[1])
 
 
 if __name__ == "__main__":
@@ -232,7 +359,7 @@ if __name__ == "__main__":
     oCB.oSL._WriteMessage(E_SL_MSG_PDM_HOST_AVAILABLE_RESPONSE,"00")
     useString = str(options.port)+ ""
     while continueToRun:
-        commandd = input(useString+'$ ')
+        command = input(useString+'$ ')
         if (command == ""):
             continueToRun = True
         else:
