@@ -40,6 +40,12 @@ E_SL_MSG_NODE_CLUSTER_LIST              =   0x8003
 E_SL_MSG_NODE_ATTRIBUTE_LIST            =   0x8004
 E_SL_MSG_NODE_COMMAND_ID_LIST           =   0x8005
 
+E_SL_MSG_NON_FACTORY_NEW_RESTART        =   0x8006
+E_SL_MSG_FACTORY_NEW_RESTART            =   0x8007
+
+E_SL_MSG_NETWORK_STATE_REQUEST          =   0x0009
+E_SL_MSG_NETWORK_STATE_RESPONSE         =   0x8009
+
 E_SL_MSG_GET_VERSION                    =   0x0010
 E_SL_MSG_VERSION_LIST                   =   0x8010
 
@@ -455,6 +461,9 @@ class cSerialLink(threading.Thread):
                     (eMessageType == E_SL_MSG_NODE_CLUSTER_LIST) or
                     (eMessageType == E_SL_MSG_NODE_ATTRIBUTE_LIST) or
                     (eMessageType == E_SL_MSG_NODE_COMMAND_ID_LIST) or
+                    (eMessageType == E_SL_MSG_NON_FACTORY_NEW_RESTART) or
+                    (eMessageType == E_SL_MSG_FACTORY_NEW_RESTART) or
+                    (eMessageType == E_SL_MSG_NETWORK_STATE_RESPONSE) or
                     (eMessageType == E_SL_MSG_NETWORK_JOINED_FORMED) or
                     (eMessageType == E_SL_MSG_MATCH_DESCRIPTOR_RESPONSE) or
                     (eMessageType == E_SL_MSG_DEVICE_ANNOUNCE) or
@@ -470,34 +479,47 @@ class cSerialLink(threading.Thread):
                     
                     if(eMessageType == E_SL_MSG_NODE_CLUSTER_LIST):
                         self.logger.info("Node->Host: Cluster List Received")
+                    
                     if(eMessageType == E_SL_MSG_NODE_ATTRIBUTE_LIST):
                         self.logger.info("Node->Host: Attribute List ")
 
                     if(eMessageType == E_SL_MSG_NODE_COMMAND_ID_LIST):
                         self.logger.info("Node->Host: Commands List ")
+                    
+                    if(eMessageType == E_SL_MSG_NON_FACTORY_NEW_RESTART):
+                        stringme=(':'.join(x.encode('utf-8').hex() for x in sData))
+                        self.logger.info("Node->Host: Non Factory New Restart %s", stringme)
+
+                    if(eMessageType == E_SL_MSG_FACTORY_NEW_RESTART):
+                        stringme=(':'.join(x.encode('utf-8').hex() for x in sData))
+                        self.logger.info("Node->Host: Factory New Restart %s", stringme)
+
+                    if(eMessageType == E_SL_MSG_NETWORK_STATE_RESPONSE):
+                        stringme=(':'.join(x.encode('utf-8').hex() for x in sData))
+                        self.logger.info("Node->Host: Network State Response %s", stringme)
 
                     if(eMessageType == E_SL_MSG_NETWORK_JOINED_FORMED):
-                        stringme= (':'.join(x.encode('hex') for x in sData))
+                        stringme= (':'.join(x.encode('utf-8').hex() for x in sData))
                         self.logger.info("Network joined/formed event received %s",stringme )
 
                     if((eMessageType == E_SL_MSG_MATCH_DESCRIPTOR_RESPONSE)):
-                        stringme= (':'.join(x.encode('hex') for x in sData))
+                        stringme= (':'.join(x.encode('utf-8').hex() for x in sData))
                         self.logger.info("Match Descriptor response %s", stringme)
 
                     if((eMessageType == E_SL_MSG_DEVICE_ANNOUNCE)):
-                        stringme= (':'.join(x.encode('hex') for x in sData))
+                        stringme= (':'.join(x.encode('utf-8').hex() for x in sData))
                         self.logger.info("Device Announce response %s", stringme)
 
                     if((eMessageType == E_SL_MSG_READ_ATTRIBUTE_RESPONSE)):
-                        stringme= (':'.join(x.encode('hex') for x in sData))
+                        stringme= (':'.join(x.encode('utf-8').hex() for x in sData))
                         self.logger.info("Read Attributes response %s", stringme)
 
                     if((eMessageType == E_SL_MSG_GET_GROUP_MEMBERSHIP_RESPONSE)):
-                        stringme= (':'.join(x.encode('hex') for x in sData))
+                        stringme= (':'.join(x.encode('utf-8').hex() for x in sData))
                         self.logger.info("Get Group response %s", stringme)
 
                     if((eMessageType == E_SL_MSG_MANAGEMENT_LQI_RESPONSE)):
-                        stringme= (':'.join(x.encode('hex') for x in sData))
+                        stringme= (':'.join(x.encode('utf-8').hex() for x in sData))
                         self.logger.info("LQI response %s", stringme)                        
 
                 else:
@@ -508,8 +530,8 @@ class cSerialLink(threading.Thread):
                             (eMessageType == E_SL_MSG_LOAD_PDM_RECORD_REQUEST) or
                             (eMessageType == E_SL_MSG_DELETE_PDM_RECORD) or
                             (eMessageType == E_SL_MSG_PDM_HOST_AVAILABLE)):                            
-                                self.dMessageQueue[eMessageType] = Queue.Queue(30)
-                        time.sleep(0)
+                                self.dMessageQueue[eMessageType] = queue.Queue(30)
+                        time.sleep(0.1)
                         self.dMessageQueue[eMessageType].put(sData)
                     except KeyError:
                             self.logger.warning("Unhandled message 0x%04x", eMessageType)
@@ -522,22 +544,23 @@ class cSerialLink(threading.Thread):
         """ Send a message to the node amd wait for its synchronous response
             Raise cSerialLinkError or cModuleError on failure
         """
-        self.logger.info("Host->Node: Command  0x%04x, length %d", eMessageType, (len(sData)/2))
+        self.logger.info("Host->Node: Command  0x%04x, length %d", eMessageType, (len(sData)//2))
         self._WriteMessage(eMessageType, sData)
-        try:
-            status = self.WaitMessage(E_SL_MSG_STATUS, 1)
-        except cSerialLinkError:
-            raise cSerialLinkError("Module did not acknowledge command 0x%04x" % eMessageType)
+        if(eMessageType is not E_SL_MSG_RESET):
+            try:
+                status = self.WaitMessage(E_SL_MSG_STATUS, 1)
+            except cSerialLinkError:
+                raise cSerialLinkError("Module did not acknowledge command 0x%04x" % eMessageType)
         
-        status = struct.unpack("B", status[0].encode('utf-8'))[0]
-        message = "" if len(sData) == 0 else sData
+            status = struct.unpack("B", status[0].encode('utf-8'))[0]
+            message = "" if len(sData) == 0 else sData
         
-        if status == 0:
-            stringme= (':'.join(x.encode('hex') for x in sData))
-            self.logger.info("Command success. %s " %message)
-        else:
-            # Error status code
-            raise cModuleError(status, message)
+            if status == 0:
+                stringme= (':'.join(x.encode('utf-8').hex() for x in sData))
+                self.logger.info("Command success. %s " %message)
+            else:
+                # Error status code
+                raise cModuleError(status, message)
 
 
     def WaitMessage(self, eMessageType, fTimeout):
@@ -559,7 +582,7 @@ class cSerialLink(threading.Thread):
                 del self.dMessageQueue[eMessageType]
             except queue.Empty:
                 # Raise exception, no data received
-                raise cSerialLinkError("Message 0x%04x not received within %fs" % (eMessageType, fTimeout))
+                raise cSerialLinkError("Message 0x%04x not received within %fs", eMessageType, fTimeout)
         
         self.logger.debug("Pulled message type 0x%04x from queue", eMessageType)
         return sData
@@ -721,6 +744,7 @@ class cControlBridge():
     def SendSwReset(self):
         """Send SW Reset"""
         self.oSL.SendMessage(E_SL_MSG_RESET)
+        return ("")
             
 
     def SetDeviceType(self,device):
