@@ -561,6 +561,8 @@ class cSerialLink(threading.Thread):
             else:
                 # Error status code
                 raise cModuleError(status, message)
+        else:
+            self.logger.info("Command RESET...")
 
 
     def WaitMessage(self, eMessageType, fTimeout):
@@ -708,7 +710,6 @@ class cControlBridge():
         if command[0] == 'ADG':
             self.AddGroup(command[1],command[2],command[3],command[4],command[5])
 
-
         if command[0] == 'CLOOP':
             self.ColourControlLoop(command[1],command[2],command[3],command[4],command[5],command[6],command[7],command[8],command[9])
 
@@ -726,6 +727,12 @@ class cControlBridge():
             conn = sqlite3.connect('pdm.db')
             c = conn.cursor()
             conn.close()
+
+        if command[0] == 'HELP':
+            print("EXIT     to exit session")
+            print("GTV      to get module's version")
+            print("RST      to reset module")
+            print("SPJ [targetAddress] [permitDuration] [TcOveride] ->to set permit join")
             
         print("")
         return True
@@ -744,7 +751,6 @@ class cControlBridge():
     def SendSwReset(self):
         """Send SW Reset"""
         self.oSL.SendMessage(E_SL_MSG_RESET)
-        return ("")
             
 
     def SetDeviceType(self,device):
