@@ -153,6 +153,104 @@ class cPDMFunctionality(threading.Thread):
         self.daemon=True
         self.start()
 
+    def run(self):
+        """  Dedicated thread for PDM
+        """
+        while(bRunning):
+            try:
+                # Get the message from the receiver thread, and delete the queue entry
+                sData = oCB.oSL.dMessageQueue[E_SL_MSG_DELETE_PDM_RECORD].get(True, 0.1)
+                del oCB.oSL.dMessageQueue[E_SL_MSG_DELETE_PDM_RECORD]
+                conn = sqlite3.connect('pdm.db')
+                c = conn.cursor()
+                conn.text_factory = str
+                conn.commit()
+                conn.close()
+            except KeyError:
+                try:
+                    # Get the message from the receiver thread, and delete the queeu entry
+                    sData = oCB.oSL.dMessageQueue[E_SL_MSG_LOAD_PDM_RECORD_REQUEST].get(True, 0.1)
+                    del oCB.oSL.dMessageQueue[E_SL_MSG_LOAD_PDM_RECORD_REQUEST]
+                    oCB.vPDMSendFunc(sData)
+                except KeyError:
+                    try:
+                        # Get the message from the receiver thread, and delete the queue entry
+                        sData = oCB.oSL.dMessageQueue[E_SL_MSG_SAVE_PDM_RECORD].get(True, 0.1)
+                        del oCB.oSL.dMessageQueue[E_SL_MSG_SAVE_PDM_RECORD]
+                        conn = sqlite3.connect('pdm.db')
+                        c = conn.cursor()
+                        conn.text_factory = str
+                        RevordId = (''.join(x.encode('hex') for x in sData[:2]))
+                        CurrentCount = (''.join(x.encode('hex') for x in sData[10:14]))
+                        u32NumberOfWrites = (''.join(x.encode('hex') for x in sData[6:10]))
+                        u32Size = (''.join(x.encode('hex') for x in sData[2:6]))
+                        dataReceived = int((''.join(x.encode('hex') for x in sData[14:18])), 16)
+                        #print RecordId
+                        #print CurrentCount
+                        #print u32NumberOfWrite
+                        #print u32Size
+                        #print dataReceived
+                        sWriteData = (''.join(x.encode('hex') for x in sData[18:(dataReceived+18)]))
+                        #print sWriteData
+                        c.execute("SELECT * FROM PdmData WHERE PdmRecId = ?", (RecordId,))
+                        data=c.fetchone()
+                        if data is None:
+                            c.execute("INSERT INTO PdmData (PdmRecId,PdmRecSize,PersistedData) VALUES (?,?,?)", (RecordId, u32Size, sWriteData))
+                        else:
+                            if(int(u32NumberOfWrite)>1):
+                                sWriteData = data[2]+sWriteData
+                                c.execute("DELETE from PdmData WHERE PdmRecId = ?", (RecordId,))
+                                c.execute("INSERT INTO PdmData (PdmRecId,PdmRecSize,PersistedData) VALUES (?,?,?)",(RecordId, u32Size, sWriteData))
+                            else:
+                                c.execute("DELETE from PdmData WHERE PdmRecId = ?", (RecordId,))
+                                c.execute("INSERT INTO PdmData (PdmRecId,PdmRecSize,PersistedData) VALUES (?,?,?)", (RecordId, u32Size, sWriteData))
+                        #print "data written\n"
+                        #print sWriteData
+                        #print "length %x\n" % len(sWriteData)
+                        oCB.oSL._WriteMessage(E_SL_MSG_SAVE_PDM_RECORD_RESPONSE, "00")
+                        conn.commit()
+                        conn.close()
+                    except KeyError:
+                        try:
+                            # Get the message from the receiver thread, and delete the queue entry
+                            sData = oCB.oSL.dMessageQueue[E_SL_MSG_PDM_HOST_AVAILABLE].get(True, 0.2)
+                            del oCB.oSL.dMessageQueue[E_SL_MSG_PDM_HOST_AVAILABLE]
+                            oCB.oSL._WriteMessage(E_SL_MSG_PDM_HOST_AVAILABLE_RESPONSE,"00")
+                        except KeyError:
+                            self.logger.debug("nothing to do")
+        self.logger.debug("Read thread terminated")
+
+class cSerialLinkError(Exception):
+    pass
+
+class cModuleError(cSerialLinkError):
+    """ Exception class for errors that the node may send back"""
+    def __init__(self, statusCode, statusMessage=""):
+            self.statusCode = statusCode
+            self.statusMessage = statusMessage
+
+            Exception.__init__(self, repr(self))
+
+    def __repr__(self):
+        if (self.statusCode == 0):
+            raise ValueError("Not a failure code")
+        elif (self.statusCode == 1):
+            r = "Incorrect Parameters"
+        elif (self.statusCode == 2):
+            r = "Unhandled Command"
+        elif (self.statusCode == 3):
+            r = "Command Failed"
+        elif (self.statusCode == 4):
+            r = "Busy"
+        elif (self.statusCode == 5):
+            r = "Stack already started"
+        else:
+            r = "Unknown status code %d" % self.statusCode
+
+        if len(self.statusMessage):
+            r = ':'.join([r, self.statusMessage])
+        return r
+
 
 class cSerialLink(threading.Thread):
     """Claass implementing the binary serial protocol to the control bridge node"""
@@ -270,7 +368,6 @@ class cSerialLink(threading.Thread):
                     bInEsc=True
                 elif (ord(byte) == 0x03):
                     self.commslogger.debug("End message")
-                    self.logger.info("Data Received: " + ":".join("{:02x}".format(ord(c)) for c in sData))
 
                     if not len(sData) == u16Length:
                         self.commslogger.warning("Length mismatch (Expected %d, got %d)", u16Length, len(sData))
@@ -389,6 +486,7 @@ class cSerialLink(threading.Thread):
                                 self.dMessageQueue[eMessageType] = queue.Queue(30)
                         time.sleep(0)
                         self.dMessageQueue[eMessageType].put(sData)
+                        self.logger.info("Put data into queue")
                     except KeyError:
                         self.logger.warning("Unhandled message 0x%04x", eMessageType)
 
@@ -407,7 +505,7 @@ class cSerialLink(threading.Thread):
         except cSerialLinkError:
             raise cSerialLinkError("Module did not acknowledge command 0x%04x" % eMessageType)
 
-        status = struct.unpack("B", status[0])[0]
+        status = struct.unpack("B", status[0].encode('utf-8'))[0]
         message = "" if len(sData) == 0 else sData
 
         if status == 0:
@@ -416,6 +514,31 @@ class cSerialLink(threading.Thread):
         else:
             # Error status code
             raise cModuleError(status, message)
+
+    def WaitMessage(self, eMessageType, fTimeout):
+        """ Wait for a message of type eMessageType for fTimeout seconds
+            Raise cSerialLinkError on failure
+            Many different threads call all block on this function as long
+            as they are waiting on different message types.
+        """
+        sData = None
+        try:
+            # Get the message from the receiver thread, and delete the queue entry
+            sData = self.dMessageQueue[eMessageType].get(True, fTimeout)
+            del self.dMessageQueue[eMessageType]
+        except KeyError:
+            self.dMessageQueue[eMessageType] = queue.Queue()
+            try:
+                # Get5 the message from the receiver thread, and delete the queue entry
+                sData = self.dMessageQueue[eMessageType].get(True, fTimeout)
+                del self.dMessageQueue[eMessageType]
+            except queue.Empty:
+                # Raise exception, no data received
+                raise cSerialLinkError("Message 0x%04x not recieved within %fs" % (eMessageType, fTimeout))
+        
+        self.logger.debug("Pulled message type 0x%04x from queue", eMessageType)
+        return sData
+
 
 
 class cControlBridge():
@@ -440,6 +563,62 @@ class cControlBridge():
     def GetVersion(self):
         """Get the version of the connected node"""
         self.oSL.SendMessage(E_SL_MSG_GET_VERSION)
+        version = self.oSL.WaitMessage(E_SL_MSG_VERSION_LIST, 0.5)
+        return struct.unpack(">I", bytes(version, 'hex'))[0]
+        #return (12345678)
+
+    def vPDMSendFunct(self, sData):
+        """ Internal function
+        """
+        #print "PDMSend"
+        conn = sqlite3.connect('pdm.db')
+        c =conn.cursor()
+        conn.text_factory = str
+        RecordId = (''.join(x.encode('hex') for x in sData))
+        #print RecordId
+        c.execute("SELECT * FROM PdmData WHERE PdmRecId = ?", (RecordId,))
+        data=c.fetchone()
+        status='00'
+        if data is None:
+            #print None
+            TotalBlocks=0
+            BlockId=0
+            size=0
+            self.oSL.SendMessage(E_SL_MSG_LOAD_PDM_RECORD_RESPONSE, (status+RecordId+str(size).zfill(8)+str(TotalBlocks).zfill(8)+str(BlockId).zfill(8))+str(size).zfill(8))
+        else:
+            status='02'
+            #print "found entry"
+            persistedData = data[2]
+            size = data[1]
+            TotalBlocks = (long(size,16)/128)
+            if((long(size,16)%128)>0):
+                NumberOfWrites = TotalBlocks + 1
+            else:
+                NumberOfWrites = TotalBlocks
+            #print size
+            #print persistedData
+            #print TotalBlocks
+            #print NumberOfWrites
+            #print long(size,16)
+            bMoreData=True
+            count=0
+            lowerbound=0
+            upperbound=0
+            while(bMoreData):
+                u32Size = long(size,16) - (count*128)
+                if(u32Size>128):
+                    u32Size=256
+                else:
+                    bMoreData=False
+                    u32Size=u32Size*2
+
+                upperbound = upperbound + u32Size
+                DataStrip = persistedData[lowerbound:upperbound]
+                count=count+1
+                self.oSL.SendMessage(E_SL_MSG_LOAD_PDM_RECORD_RESPONSE, (status+RecordId+size+(hex(NumberOfWrites).strip('0x')).strip('L').zfill(8)+(hex(count).strip('0x')).strip('L').zfill(8)+(hex(u32Size/2).strip('0x')).strip('L').zfill(8)+sDataStrip))
+                lowerbound = lowerbound+u32Size
+        conn.commit()
+        conn.close()
 
 if __name__ == "__main__":
     from optparse import OptionParser
