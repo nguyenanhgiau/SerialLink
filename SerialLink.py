@@ -208,17 +208,17 @@ class cPDMFunctionality(threading.Thread):
                         conn = sqlite3.connect('pdm.db')
                         c = conn.cursor()
                         conn.text_factory = str
-                        RecordId = (''.join(x.encode('hex') for x in sData[:2]))
-                        CurrentCount = (''.join(x.encode('hex') for x in sData[10:14]))
-                        u32NumberOfWrites = (''.join(x.encode('hex') for x in sData[6:10]))
-                        u32Size = (''.join(x.encode('hex') for x in sData[2:6]))
-                        dataReceived = int((''.join(x.encode('hex') for x in sData[14:18])),16)
+                        RecordId = (''.join(x.encode('utf-8').hex() for x in sData[:2]))
+                        CurrentCount = (''.join(x.encode('utf-8').hex() for x in sData[10:14]))
+                        u32NumberOfWrites = (''.join(x.encode('utf-8').hex() for x in sData[6:10]))
+                        u32Size = (''.join(x.encode('utf-8').hex() for x in sData[2:6]))
+                        dataReceived = int((''.join(x.encode('utf-8').hex() for x in sData[14:18])),16)
                         #print RecordId
                         #print CurrentCount
                         #print u32NumberOfWrites
                         #print u32Size
                         #print dataReceived                           
-                        sWriteData=(''.join(x.encode('hex') for x in sData[18:(dataReceived+18)]))
+                        sWriteData=(''.join(x.encode('utf-8').hex() for x in sData[18:(dataReceived+18)]))
                         #print sWriteData
                         c.execute("SELECT * FROM PdmData WHERE PdmRecId = ?", (RecordId,))
                         data=c.fetchone()                        
@@ -862,7 +862,7 @@ class cControlBridge():
         conn = sqlite3.connect('pdm.db')
         c = conn.cursor()
         conn.text_factory = str
-        RecordId = (''.join(x.encode('hex') for x in sData))
+        RecordId = (''.join(x.encode('utf-8').hex() for x in sData))
         #print RecordId
         c.execute("SELECT * FROM PdmData WHERE PdmRecId = ?", (RecordId,))
         data=c.fetchone()                        
