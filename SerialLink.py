@@ -165,93 +165,22 @@ E_SL_MSG_DELETE_PDM_RECORD              =   0x0202
 E_SL_MSG_PDM_HOST_AVAILABLE             =   0x0300
 E_SL_MSG_PDM_HOST_AVAILABLE_RESPONSE    =   0x8300
 
+# OTA Comand
+E_SL_MSG_OTA_SEND_LOAD_NEW_IMAGE        =   0x0500
+E_SL_MSG_SEND_OTA_BLOCK_REQUEST         =   0x8501
+E_SL_MSG_SEND_OTA_BLOCK                 =   0x0502
+E_SL_MSG_SEND_OTA_END_REQUEST           =   0x8503
+E_SL_MSG_SEND_OTA_END_RESPONSE          =   0x0504
+E_SL_MSG_SEND_OTA_IMGAE_NOTIFY          =   0x0505
+E_SL_MSG_SEND_OTA_SET_WAIT_FOR_DATA_PARAMS = 0x0506
+
+
+
 # Global flag to the threads
 bRunning = True
-
-class cPDMFunctionality(threading.Thread):
-    """Class implementing the binary serial protrocol to the control bridge node"""
-    def __init__(self,port):
-        threading.Thread.__init__(self, name="PDM")              
-        
-        # Message queue used to pass messages between reader thread and WaitMessage()
-        self.dMessageQueue = {}
-        self.logger = logging.getLogger(str(port))
-        # Start reader thread
-        self.daemon=True
-        self.start()
-        
-    def run(self):
-        """ dedicated thread for PDM
-        """        
-        while(bRunning):
-            try:
-                # Get the message from the receiver thread, and delete the queue entry
-                sData = oCB.oSL.dMessageQueue[E_SL_MSG_DELETE_PDM_RECORD].get(True, 0.1)
-                del oCB.oSL.dMessageQueue[E_SL_MSG_DELETE_PDM_RECORD]
-                conn = sqlite3.connect('pdm.db')
-                c = conn.cursor()
-                conn.text_factory = str
-                c.execute('DELETE from PdmData')
-                conn.commit()
-                conn.close()
-            except KeyError:
-                try:
-                # Get the message from the receiver thread, and delete the queue entry
-                    sData = oCB.oSL.dMessageQueue[E_SL_MSG_LOAD_PDM_RECORD_REQUEST].get(True, 0.1)
-                    del oCB.oSL.dMessageQueue[E_SL_MSG_LOAD_PDM_RECORD_REQUEST]
-                    oCB.vPDMSendFunc(sData)
-                except KeyError:                
-                    try:
-                        # Get the message from the receiver thread, and delete the queue entry
-                        sData = oCB.oSL.dMessageQueue[E_SL_MSG_SAVE_PDM_RECORD].get(True, 0.1)
-                        del oCB.oSL.dMessageQueue[E_SL_MSG_SAVE_PDM_RECORD]
-                        conn = sqlite3.connect('pdm.db')
-                        c = conn.cursor()
-                        conn.text_factory = str
-                        RecordId = (''.join(x.encode('utf-8').hex() for x in sData[:2]))
-                        CurrentCount = (''.join(x.encode('utf-8').hex() for x in sData[10:14]))
-                        u32NumberOfWrites = (''.join(x.encode('utf-8').hex() for x in sData[6:10]))
-                        u32Size = (''.join(x.encode('utf-8').hex() for x in sData[2:6]))
-                        dataReceived = int((''.join(x.encode('utf-8').hex() for x in sData[14:18])),16)
-                        #print RecordId
-                        #print CurrentCount
-                        #print u32NumberOfWrites
-                        #print u32Size
-                        #print dataReceived                           
-                        sWriteData=(''.join(x.encode('utf-8').hex() for x in sData[18:(dataReceived+18)]))
-                        #print sWriteData
-                        c.execute("SELECT * FROM PdmData WHERE PdmRecId = ?", (RecordId,))
-                        data=c.fetchone()                        
-                        if data is None:
-                            c.execute("INSERT INTO  PdmData (PdmRecId,PdmRecSize,PersistedData) VALUES (?,?,?)",(RecordId,u32Size,sWriteData))
-                        else:
-                            if(int(u32NumberOfWrites)>1 ):
-                                sWriteData = data[2]+sWriteData                                
-                                c.execute("DELETE from PdmData WHERE PdmRecId = ? ",(RecordId,))
-                                c.execute("INSERT INTO  PdmData (PdmRecId,PdmRecSize,PersistedData) VALUES (?,?,?)",(RecordId,u32Size,sWriteData))
-                            else:
-                                c.execute("DELETE from PdmData WHERE PdmRecId = ? ",(RecordId,))
-                                c.execute("INSERT INTO  PdmData (PdmRecId,PdmRecSize,PersistedData) VALUES (?,?,?)",(RecordId,u32Size,sWriteData))
-                        #print "data written\n"
-                        #print sWriteData
-                        #print "length %x\n" %len(sWriteData)
-                        oCB.oSL._WriteMessage(E_SL_MSG_SAVE_PDM_RECORD_RESPONSE,"00")
-                        conn.commit()
-                        conn.close()
-                    except KeyError:
-                        try:
-                            # Get the message from the receiver thread, and delete the queue entry
-                            sData = oCB.oSL.dMessageQueue[E_SL_MSG_PDM_HOST_AVAILABLE].get(True, 0.2)
-                            del oCB.oSL.dMessageQueue[E_SL_MSG_PDM_HOST_AVAILABLE]
-                            oCB.oSL._WriteMessage(E_SL_MSG_PDM_HOST_AVAILABLE_RESPONSE,"00")
-
-                        except KeyError:                      
-                            self.logger.debug("nothing to do")
-        self.logger.debug("Read thread terminated")
-
-class cSerialLinkError(Exception):
+ 
+class cSerialLinkError(Exception): 
     pass
-
 
 
 class cModuleError(cSerialLinkError):
@@ -399,6 +328,7 @@ class cSerialLink(threading.Thread):
                     bInEsc = True
                 elif (ord(byte) == 0x03):
                     self.commslogger.debug("End Message")
+                    self.logger.info("Data Received: " + ":".join(x.encode('utf-8').hex() for x in sData))
                     
                     if not len(sData) == u16Length:
                         self.commslogger.warning("Length mismatch (Expected %d, got %d)", u16Length, len(sData))
@@ -595,7 +525,6 @@ class cControlBridge():
     """Class implementing commands to the control bridge node"""
     def __init__(self, port, baudrate=115200):
         self.oSL = cSerialLink(port, baudrate)
-        self.oPdm = cPDMFunctionality(port)
         #self.oSL._WriteMessage(E_SL_MSG_PDM_HOST_AVAILABLE_RESPONSE,"00")
 
     def parseCommand(self,IncCommand):
@@ -728,6 +657,12 @@ class cControlBridge():
             c = conn.cursor()
             conn.close()
 
+        if command[0] == 'OTA':
+            # command[1] is path to OTA image
+            #TODO Open file and convert to byte array
+            #TODO Parsing OTA info and send to serial
+            self.SendOtaLoadNewImage(command[1])
+
         if command[0] == 'HELP':
             print("EXIT     to exit session")
             print("GTV      to get module's version")
@@ -854,6 +789,26 @@ class cControlBridge():
     def MoveToColourTemperature(self,addressmode,targetAddress,srcEp,DstEp,colourtemp,transitionTime):
         """move to temperature"""
         self.oSL.SendMessage(E_SL_MSG_MOVE_TO_COLOUR_TEMPERATURE,(str(addressmode)+str(targetAddress)+str(srcEp)+ str(DstEp)+str(colourtemp)+str(transitionTime)))
+
+    def SendOtaLoadNewImage(self, addressmode, shortAddress, fileIdentifier, headerVersion, headerLength, headerControlField, manufactureCode, imageType, fileVersion, stackVersion, headerString, totalImage, securityCredVersion, upgradeFieldDest, minimumHwVersion, maximumHwVersion):
+        #TODO Step3. Send info to serial
+        self.oSL.SendMessage(E_SL_MSG_OTA_LOAD_NEW_IMAGE, (str(addressmode)+str(shortAddress)+str(fileIndetifier)+str(headerVersion)+str(headerLength)+str(headerControlField)+str(manufactureCode)+str(imageType)+str(fileVersion)+str(stackVersion)+str(headerString)+str(totalImage)+str(securityCredVersion)+str(upgradeFieldDest)+str(minimumHwVersion)+str(maximumHwVersion)))
+
+    def SendOtaImageNotify(self, addressmode, shortAddress, srcEp, dstEp, notifyType, fileVersion, imageType, manuCode, Jtter):
+        #TODO Correct data
+        self.oSL.SendMessage(E_SL_MSG_OTA_IMAGE_NOTIFY, (str(addressmode)+str(shortAddress)))
+
+    def SendOtaSetWaitForDataParams(self, addressmode, targetAddress):
+        #TODO add code
+        self.oSL.SendMessage(E_SL_MSG_OTA_SET, (str(addressmode)))
+
+    def SendOtaBlock(self, addressmode):
+        #TODO Add code
+        self.oSL.SendMessage(E_SL_MSG_OTA, str(addressmode))
+    
+    def SendOtaEndResponse(self, addressmode):
+        #TODO Add code
+        self.oSL.SendMessage(E_SL_MSG_OTA, str(addressmode))
 
     def vPDMSendFunc(self,sData):
         """ Internal function
