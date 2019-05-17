@@ -166,9 +166,9 @@ E_SL_MSG_PDM_HOST_AVAILABLE             =   0x0300
 E_SL_MSG_PDM_HOST_AVAILABLE_RESPONSE    =   0x8300
 
 # OTA Comand
-E_SL_MSG_OTA_SEND_LOAD_NEW_IMAGE        =   0x0500
+E_SL_MSG_SEND_OTA_LOAD_NEW_IMAGE        =   0x0500
 E_SL_MSG_SEND_OTA_BLOCK_REQUEST         =   0x8501
-E_SL_MSG_SEND_OTA_BLOCK                 =   0x0502
+E_SL_MSG_SEND_OTA_BLOCK_RESPONSE        =   0x0502
 E_SL_MSG_SEND_OTA_END_REQUEST           =   0x8503
 E_SL_MSG_SEND_OTA_END_RESPONSE          =   0x0504
 E_SL_MSG_SEND_OTA_IMGAE_NOTIFY          =   0x0505
@@ -399,7 +399,9 @@ class cSerialLink(threading.Thread):
                     (eMessageType == E_SL_MSG_DEVICE_ANNOUNCE) or
                     (eMessageType == E_SL_MSG_READ_ATTRIBUTE_RESPONSE)or
                     (eMessageType == E_SL_MSG_GET_GROUP_MEMBERSHIP_RESPONSE) or 
-                    (eMessageType == E_SL_MSG_MANAGEMENT_LQI_RESPONSE)):
+                    (eMessageType == E_SL_MSG_MANAGEMENT_LQI_RESPONSE) or
+                    (eMessageType == E_SL_MSG_SEND_OTA_BLOCK_REQUEST)
+                    (eMessageType == E_SL_MSG_SEND_OTA_END_REQUEST)):
                     if (eMessageType == E_SL_MSG_LOG):
                         logLevel = struct.unpack("B", bytes(sData[0], 'utf-8'))[0]
                         logLevel = ["EMERG", "ALERT", "CRIT ", "ERROR", "WARN ", "NOT  ", "INFO ", "DEBUG"][logLevel]
@@ -450,7 +452,28 @@ class cSerialLink(threading.Thread):
 
                     if((eMessageType == E_SL_MSG_MANAGEMENT_LQI_RESPONSE)):
                         stringme= (':'.join(x.encode('utf-8').hex() for x in sData))
-                        self.logger.info("LQI response %s", stringme)                        
+                        self.logger.info("LQI response %s", stringme)
+                    if(eMessageType == E_SL_MSG_SEND_OTA_END_REQUEST):
+                        stringme= (':'.join(x.encode('utf-8').hex() for x in sData))
+                        self.logger.info("OTA End request", stringme)
+                    if(eMessageType == E_SL_MSG_SEND_OTA_BLOCK_REQUEST):
+                        u8Offset = 0
+                        u8SQN = sData[u8Offset]
+                        u8Offset = u8Offset + 1
+                        u8SrcEndpoint = sData[u8Offset]
+                        u8Offset = u8Offset + 1
+
+                        u16ClusterId = sData[u8Offset]
+                        u8Offset = u8Offset + 1
+                        u16ClusterId = u16ClusterId<<8
+                        u16ClusterId = u16ClusterId | sData[u8Offset]
+                        u8Offset = u8Offset + 1
+
+                        u8SrcAddrMode = sData[u8Offset]
+                        u8Offset = u8Offset + 1
+
+                        u16SrcAddr = sData[u8Offset]
+                        u8Offset = u8Offset + 1
 
                 else:
                     try:
