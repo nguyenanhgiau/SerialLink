@@ -27,6 +27,7 @@ import struct
 import threading
 import queue
 import sqlite3
+import os
 
 # Message types
 
@@ -166,14 +167,34 @@ E_SL_MSG_PDM_HOST_AVAILABLE             =   0x0300
 E_SL_MSG_PDM_HOST_AVAILABLE_RESPONSE    =   0x8300
 
 # OTA Comand
-E_SL_MSG_OTA_SEND_LOAD_NEW_IMAGE        =   0x0500
+E_SL_MSG_SEND_OTA_LOAD_NEW_IMAGE        =   0x0500
 E_SL_MSG_SEND_OTA_BLOCK_REQUEST         =   0x8501
-E_SL_MSG_SEND_OTA_BLOCK                 =   0x0502
+E_SL_MSG_SEND_OTA_BLOCK_RESPONSE        =   0x0502
 E_SL_MSG_SEND_OTA_END_REQUEST           =   0x8503
 E_SL_MSG_SEND_OTA_END_RESPONSE          =   0x0504
 E_SL_MSG_SEND_OTA_IMGAE_NOTIFY          =   0x0505
 E_SL_MSG_SEND_OTA_SET_WAIT_FOR_DATA_PARAMS = 0x0506
+# Variable for OTA
+au8OTAFile = ""
+u8OtaInProgress = 0
+u8OTAWaitForDataParamsPeding = 0
 
+u32OTAWaitForDataParamsCurrentTime = 0
+u32OTAWaitForDataParamsRequestTime = 0
+u16OTAWaitForDataParamsBlockDelay = 0
+u32OtaFileIdentifier = 0
+u16OtaFileHeaderVersion = 0
+u16OtaFileHeaderLength = 0
+u16OtaFileHeaderControlField = 0
+u16OtaFileManufactureCode = 0
+u16OtaFileImageType = 0
+u32OtaFileVersion = 0
+u16OtaFileStackVersion = 0
+u32OtaFileTotalImage = 0
+u8OtaFileSecurityCredVersion = 0
+u64OtaFileUpgradeFileDest = 0
+u16OtaFileMinimumHwVersion = 0
+u16OtaFileMaxHwVersion = 0
 
 
 # Global flag to the threads
@@ -660,8 +681,38 @@ class cControlBridge():
         if command[0] == 'OTA':
             # command[1] is path to OTA image
             #TODO Open file and convert to byte array
-            #TODO Parsing OTA info and send to serial
-            self.SendOtaLoadNewImage(command[1])
+            try:
+                f = open(command[1], "rb")
+                au8OTAFile = f.read(os.stat(f.name).st_size)
+                u32OtaFileIdentifier = au8OTAFile[3]<<24 | au8OTAFile[2]<<16 | au8OTAFile[1]<<8 | au8OTAFile[0]
+                print('File ID: {:X}'.format(u32OtaFileIdentifier))
+                u16OtaFileHeaderVersion = au8OTAFile[5]<<8 | au8OTAFile[4]
+                print('Header Ver: {:X}'.format(u16OtaFileHeaderVersion))
+                u16OtaFileHeaderLength = au8OTAFile[7]<<8 | au8OTAFile[6]
+                print('Header Len: {:X}'.format(u16OtaFileHeaderLength))
+                u16OtaFileHeaderControlField = au8OTAFile[9]<<8 | au8OTAFile[8]
+                print('Header FCTL: {:02X}'.format(u16OtaFileHeaderControlField))
+                u16OtaFileManufactureCode = au8OTAFile[11]<<8 | au8OTAFile[10]
+                print('Manu Code: {:X}'.format(u16OtaFileManufactureCode))
+                u16OtaFileImageType = au8OTAFile[13]<<8 | au8OTAFile[12]
+                print('Image Type: {:04X}'.format(u16OtaFileImageType))
+                u32OtaFileVersion = au8OTAFile[17]<<24 | au8OTAFile[16]<<16 | au8OTAFile[15]<<8 | au8OTAFile[14]
+                print('File Version: {:08X}'.format(u32OtaFileVersion))
+                u16OtaFileStackVersion = au8OTAFile[19]<<8 | au8OTAFile[18]
+                print('Stack Version: {:02X}'.format(u16OtaFileStackVersion))
+                u32OtaFileTotalImage = au8OTAFile[55]<<24 | au8OTAFile[54]<<16 | au8OTAFile[53]<<8 | au8OTAFile[52]
+                print('Size: {}'.format(u32OtaFileTotalImage))
+                u8OtaFileSecurityCredVersion = au8OTAFile[56]
+                u64OtaFileUpgradeFileDest = au8OTAFile[64]<<56 | au8OTAFile[63]<<48 | au8OTAFile[62]<<40 | au8OTAFile[61]<<32 | au8OTAFile[60]<<24 | au8OTAFile[59]<<16 | au8OTAFile[58]<<8 | au8OTAFile[57]
+                u16OtaFileMinimumHwVersion = au8OTAFile[66]<<8 | au8OTAFile[65]
+                u16OtaFileMaxHwVersion = au8OTAFile[68]<<8 | au8OTAFile[67]
+                au8OtaFileHeaderString = au8OTAFile[20:52]
+                print('Header Str: {}'.format(au8OtaFileHeaderString))
+                f.close()
+                #TODO Parsing data to send
+                self.SendOtaLoadNewImage(0x02, 0x0000, u32OtaFileIdentifier, u16OtaFileHeaderVersion, u16OtaFileHeaderLength, u16OtaFileHeaderControlField, u16OtaFileManufactureCode, u16OtaFileImageType, u32OtaFileVersion, u16OtaFileStackVersion, au8OtaFileHeaderString, u32OtaFileTotalImage, u8OtaFileSecurityCredVersion, u64OtaFileUpgradeFileDest, u16OtaFileMinimumHwVersion, u16OtaFileMaxHwVersion)
+            except IOError:
+                print("Error: File do not appear to exist.")
 
         if command[0] == 'HELP':
             print("EXIT     to exit session")
@@ -792,7 +843,7 @@ class cControlBridge():
 
     def SendOtaLoadNewImage(self, addressmode, shortAddress, fileIdentifier, headerVersion, headerLength, headerControlField, manufactureCode, imageType, fileVersion, stackVersion, headerString, totalImage, securityCredVersion, upgradeFieldDest, minimumHwVersion, maximumHwVersion):
         #TODO Step3. Send info to serial
-        self.oSL.SendMessage(E_SL_MSG_OTA_LOAD_NEW_IMAGE, (str(addressmode)+str(shortAddress)+str(fileIndetifier)+str(headerVersion)+str(headerLength)+str(headerControlField)+str(manufactureCode)+str(imageType)+str(fileVersion)+str(stackVersion)+str(headerString)+str(totalImage)+str(securityCredVersion)+str(upgradeFieldDest)+str(minimumHwVersion)+str(maximumHwVersion)))
+        self.oSL.SendMessage(E_SL_MSG_SEND_OTA_LOAD_NEW_IMAGE, "00")
 
     def SendOtaImageNotify(self, addressmode, shortAddress, srcEp, dstEp, notifyType, fileVersion, imageType, manuCode, Jtter):
         #TODO Correct data
